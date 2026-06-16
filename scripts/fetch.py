@@ -232,7 +232,7 @@ def fetch_stay_data(headers, report_id, start, end):
     return {"day1": 0, "day7": 0}
 
 
-def fetch_coin_recovery(headers, report_id, cutoff_date):
+def fetch_coin_recovery(headers, report_id, cutoff_date, start, end):
     """金币大派送：回收金币 = 用户投放金币总数 - 用户领取金币总数"""
     url = f"{BASE_URL}/admin/fission-stat/reward-detail"
     params = {"id": report_id}
@@ -249,7 +249,11 @@ def fetch_coin_recovery(headers, report_id, cutoff_date):
             continue
         total_user += p.get("user_coin", 0)
         total_get += p.get("get_coin", 0)
-    return total_user - total_get, total_user
+    recovery = total_user - total_get
+    # 投放金币人数(type=38)、领取金币人数(type=39)
+    put_num = fetch_metric(headers, report_id, 38, ["platform"], start, end)
+    get_num = fetch_metric(headers, report_id, 39, ["platform"], start, end)
+    return recovery, total_user, put_num, get_num
 
 
 def fetch_activity(headers, act, coin_cutoff):
@@ -277,8 +281,10 @@ def fetch_activity(headers, act, coin_cutoff):
 
     coin_recovery = 0
     coin_user_total = 0
+    coin_put_num = 0
+    coin_get_num = 0
     if is_coin and coin_cutoff:
-        coin_recovery, coin_user_total = fetch_coin_recovery(headers, rid, coin_cutoff)
+        coin_recovery, coin_user_total, coin_put_num, coin_get_num = fetch_coin_recovery(headers, rid, coin_cutoff, s, e)
 
     return {
         "activity": act["activity"],
@@ -293,6 +299,8 @@ def fetch_activity(headers, act, coin_cutoff):
         "day1": stay["day1"], "day7": stay["day7"],
         "coin_recovery": coin_recovery,
         "coin_user_total": coin_user_total,
+        "coin_put_num": coin_put_num,
+        "coin_get_num": coin_get_num,
     }
 
 
@@ -325,7 +333,7 @@ def build_excel(all_data, output_file, has_coin):
         "次留", "7日留",                                            # J-K
     ]
     if has_coin:
-        headers.extend(["回收金币", "金币回收比例"])
+        headers.extend(["回收金币", "金币回收比例", "投放金币人数", "投放金币率", "领取金币人数", "领取金币率"])
 
     for i, h in enumerate(headers, 1):
         c = ws.cell(row=1, column=i, value=h)
@@ -391,22 +399,28 @@ def build_excel(all_data, output_file, has_coin):
                 set_cell(ws, row, 10)
                 set_cell(ws, row, 11)
 
-            # L-M: 金币回收（可选）
+            # L-Q: 金币相关（可选）
             if has_coin:
                 if is_first and d.get("is_coin"):
                     set_cell(ws, row, coin_col_start, d["coin_recovery"] if d["coin_recovery"] > 0 else SLASH)
                     ratio = d["coin_recovery"] / d["coin_user_total"] if d["coin_user_total"] > 0 else 0
                     set_cell(ws, row, coin_col_start + 1, ratio if ratio > 0 else SLASH, pct)
+                    put_num = d.get("coin_put_num", 0)
+                    get_num = d.get("coin_get_num", 0)
+                    set_cell(ws, row, coin_col_start + 2, put_num if put_num > 0 else SLASH)
+                    set_cell(ws, row, coin_col_start + 3, f'=IF(OR($C${first_row}=0,{chr(64+coin_col_start+2)}{row}="/"),"/",{chr(64+coin_col_start+2)}{row}/$C${first_row})', pct)
+                    set_cell(ws, row, coin_col_start + 4, get_num if get_num > 0 else SLASH)
+                    set_cell(ws, row, coin_col_start + 5, f'=IF(OR($C${first_row}=0,{chr(64+coin_col_start+4)}{row}="/"),"/",{chr(64+coin_col_start+4)}{row}/$C${first_row})', pct)
                 else:
-                    set_cell(ws, row, coin_col_start)
-                    set_cell(ws, row, coin_col_start + 1)
+                    for c in range(coin_col_start, coin_col_start + 6):
+                        set_cell(ws, row, c)
 
             row += 1
 
     # 列宽
     widths = [14, 24, 8, 20, 10, 40, 12, 10, 12, 10, 10]
     if has_coin:
-        widths.extend([14, 12])
+        widths.extend([14, 12, 14, 12, 14, 12])
     for i, w in enumerate(widths, 1):
         col_letter = chr(64 + i) if i <= 26 else "A" + chr(64 + i - 26)
         ws.column_dimensions[col_letter].width = w
