@@ -16,19 +16,13 @@ description: |
 
 ## 工作流程
 
-### 1. 确定客户
+### 1. 获取凭证
 
-检查用户是否指定了客户名称。如果工作目录下有 `config.json`，读取其中的 `customers` 列表匹配客户。
+需要用户提供两个信息：
+- **Token**：登录 Turbolink 后台后，从浏览器 DevTools → Network → 任意请求的 `Authorization` 请求头中复制
+- **项目 ID**：Turbolink 后台 URL 中的 `pjid` 参数值
 
-**如果有 config.json：**
-- 根据用户提到的名称（如"麦芽"、"Mulebuy"、"海创"）模糊匹配 `customers[].name`
-- 找到后取出 `hash_id`（项目 ID）和 `token`
-- 如果匹配到多个或未匹配，列出候选让用户选择
-
-**如果没有 config.json：**
-- 需要用户提供两个信息：
-  - **Token**：登录 Turbolink 后台后，从浏览器 DevTools → Network → 任意请求的 `Authorization` 请求头中复制
-  - **项目 ID**：Turbolink 后台 URL 中的 `pjid` 参数值
+如果用户没有主动提供，询问他们。
 
 ### 2. 检查 Token 有效性
 
