@@ -2,32 +2,37 @@
 
 ## 这是什么
 
-一个 AI 编程助手的 Skill，让你通过对话拉取 Turbolink 活动数据并导出 Excel。支持 Claude Code、Codex 等工具。
+一个 AI 编程助手的 Skill，让你通过对话拉取 Turbolink 活动数据并导出 Excel。支持 Claude Code、Codex、Grok 等工具。
+
+GitHub 仓库：https://github.com/fay924/turbolink-data
 
 ## 安装
 
-### 方式一：手动安装（推荐）
+### 方式一：命令行安装（推荐）
 
-1. 下载 `turbolink-data` 文件夹（包含 SKILL.md、scripts/、references/）
-2. 放到你的 AI 工具的 skills 目录：
-
-**Claude Code：**
-```
-~/.claude/skills/turbolink-data/
+```bash
+git clone https://github.com/fay924/turbolink-data.git ~/.claude/skills/turbolink-data
 ```
 
-**Codex：**
-```
-~/.codex/skills/turbolink-data/
-```
+### 方式二：让 AI 帮你安装
 
-3. 重启 AI 工具，skill 自动加载
+把下面这段话复制粘贴给 AI：
 
-### 方式二：通过 skill-add 安装（Claude Code）
+> 帮我安装 turbolink-data 这个 Claude Code skill。
+> 执行 git clone https://github.com/fay924/turbolink-data.git ~/.claude/skills/turbolink-data
+> 验证：ls ~/.claude/skills/turbolink-data/ 应该看到 SKILL.md、scripts/、references/ 三项
 
-如果你收到了 `.skill` 压缩包，直接运行：
-```
-/skill-add path/to/turbolink-data.skill
+### 方式三：手动下载
+
+1. 从 GitHub 下载仓库（Code → Download ZIP）
+2. 解压后放到 skills 目录：
+   - Claude Code：`~/.claude/skills/turbolink-data/`
+   - Codex：`~/.codex/skills/turbolink-data/`
+
+### 更新
+
+```bash
+cd ~/.claude/skills/turbolink-data && git pull
 ```
 
 ## 前置条件
@@ -104,7 +109,7 @@ python3 scripts/fetch.py \
   --token "Bearer xxx" \
   --project-id "abc123" \
   --coin-cutoff 2026-06-11 \
-  --output 麦芽数据.xlsx
+  --output 公司名数据.xlsx
 ```
 
 ## Excel 输出说明
