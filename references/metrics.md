@@ -35,6 +35,40 @@
 
 统计范围：活动开始至指定截止日期（`--coin-cutoff` 参数），包含截止日当天。
 
+## 赛事竞猜活动特殊逻辑
+
+赛事竞猜活动（`fission_mark = "vs"`）输出到独立的「赛事竞猜」Sheet，包含两级表头：
+
+### 活动级指标（行1表头）
+
+| 指标 | 说明 |
+|------|------|
+| UV | 活动独立访客数 |
+| 完成任务人数 | `/fbi/report/custom` type=11 |
+| 任务完成率 | 完成任务人数 / UV |
+| 完成任务次数 | type=11 的 `num` 字段 |
+
+### 每场比赛指标（行2表头）
+
+| 指标 | 数据来源 | 说明 |
+|------|----------|------|
+| 竞猜时间 | `schedules[].vs_date` | 开赛时间，按升序排列 |
+| A队投票人数 | `schedules[].votes[0].vote_user_num` | 投A队赢的独立用户数 |
+| 平局投票人数 | `schedules[].votes[2].vote_user_num` | 投平局的独立用户数 |
+| B队投票人数 | `schedules[].votes[1].vote_user_num` | 投B队赢的独立用户数 |
+| 单次参加投票人数 | A队 + 平局 + B队投票人数 | 该场比赛总投票用户数 |
+| 胜队 | `schedules[].win_type` + `win_team_id` | win_type=0: 未开奖(/)、=1: 某队胜、=2: 平局 |
+| 领奖人数 | `schedules[].reward_num` | 该场比赛领取奖励的用户数 |
+| 领奖率 | 领奖人数 / 胜队投票人数 | 胜队投票人数为0时显示/ |
+
+### 赛事数据来源
+
+通过 `/admin/fission-stat/reward-detail` 接口获取 `schedules` 数组：
+- `teams[]`：队伍信息（id, name）
+- `votes[]`：投票数据（win_type, win_team_id, vote_num, vote_user_num）
+- `win_type`：0=未开奖, 1=某队胜, 2=平局
+- `win_team_id`：胜队 ID（win_type=1 时有效）
+
 ## 激励养成活动特殊逻辑
 
 激励养成活动（`fission_mark = "keep"`）有两行数据：

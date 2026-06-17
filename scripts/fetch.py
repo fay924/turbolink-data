@@ -256,6 +256,69 @@ def fetch_coin_recovery(headers, report_id, cutoff_date, start, end):
     return recovery, total_user, put_num, get_num
 
 
+def fetch_match_data(headers, report_id):
+    """赛事竞猜：从 reward-detail 的 schedules 字段获取竞猜场次数据"""
+    url = f"{BASE_URL}/admin/fission-stat/reward-detail"
+    params = {"id": report_id}
+    resp = safe_request("get", url, headers=headers, params=params)
+    data = resp.json().get("data", {})
+    schedules = data.get("schedules") or []
+    matches = []
+    for s in schedules:
+        teams = s.get("teams", [])
+        votes = s.get("votes", [])
+        team_a = teams[0]["name"] if len(teams) > 0 else ""
+        team_b = teams[1]["name"] if len(teams) > 1 else ""
+        a_votes = votes[0].get("vote_user_num", 0) if len(votes) > 0 else 0
+        b_votes = votes[1].get("vote_user_num", 0) if len(votes) > 1 else 0
+        draw_votes = votes[2].get("vote_user_num", 0) if len(votes) > 2 else 0
+        total_votes = a_votes + draw_votes + b_votes
+        # 胜队判断
+        win_type = s.get("win_type", 0)
+        win_team_id = s.get("win_team_id", "")
+        if win_type == 0:
+            winner = "/"
+        elif win_type == 2:
+            winner = "平局"
+        elif win_team_id and len(teams) > 0:
+            if win_team_id == teams[0].get("id"):
+                winner = team_a
+            elif len(teams) > 1 and win_team_id == teams[1].get("id"):
+                winner = team_b
+            else:
+                winner = "/"
+        else:
+            winner = "/"
+        reward_num = s.get("reward_num", 0)
+        # 领奖率 = 领奖人数 / 胜队投票人数
+        if win_type == 1 and win_team_id:
+            if len(teams) > 0 and win_team_id == teams[0].get("id"):
+                win_votes = a_votes
+            elif len(teams) > 1 and win_team_id == teams[1].get("id"):
+                win_votes = b_votes
+            else:
+                win_votes = 0
+        elif win_type == 2:
+            win_votes = draw_votes
+        else:
+            win_votes = 0
+        reward_rate = reward_num / win_votes if win_votes > 0 else 0
+        matches.append({
+            "vs_date": s.get("vs_date", ""),
+            "team_a": team_a,
+            "draw_votes": draw_votes,
+            "team_b": team_b,
+            "a_votes": a_votes,
+            "b_votes": b_votes,
+            "total_votes": total_votes,
+            "winner": winner,
+            "reward_num": reward_num,
+            "reward_rate": reward_rate,
+        })
+    matches.sort(key=lambda x: x["vs_date"])
+    return matches
+
+
 def fetch_activity(headers, act, coin_cutoff):
     rid = act["report_id"]
     s, e = act["start"], act["end"]
@@ -263,6 +326,7 @@ def fetch_activity(headers, act, coin_cutoff):
     is_sign_in = (fmark == "sign_in")
     is_grow = (fmark == "keep")
     is_coin = (fmark == "coin")
+    is_vs = (fmark == "vs")
     stay = fetch_stay_data(headers, rid, s, e)
 
     if is_sign_in:
@@ -286,11 +350,16 @@ def fetch_activity(headers, act, coin_cutoff):
     if is_coin and coin_cutoff:
         coin_recovery, coin_user_total, coin_put_num, coin_get_num = fetch_coin_recovery(headers, rid, coin_cutoff, s, e)
 
+    matches = []
+    if is_vs:
+        matches = fetch_match_data(headers, rid)
+
     return {
         "activity": act["activity"],
         "period": f"{s} ~ {e}",
         "is_grow": is_grow,
         "is_coin": is_coin,
+        "is_vs": is_vs,
         "uv": act.get("uv", 0),
         "click": click,
         "grow_click": grow_click,
@@ -301,6 +370,7 @@ def fetch_activity(headers, act, coin_cutoff):
         "coin_user_total": coin_user_total,
         "coin_put_num": coin_put_num,
         "coin_get_num": coin_get_num,
+        "matches": matches,
     }
 
 
@@ -326,6 +396,10 @@ def build_excel(all_data, output_file, has_coin):
     hfill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
     hfont = Font(bold=True, size=11, color="FFFFFF")
 
+    # 分离 vs 活动和其他活动
+    normal_data = [d for d in all_data if not d.get("is_vs")]
+    vs_data = [d for d in all_data if d.get("is_vs")]
+
     headers = [
         "活动名称", "活动时间", "UV",                              # A-C
         "点击活动主按钮人数", "活动参与率",                          # D-E
@@ -346,7 +420,7 @@ def build_excel(all_data, output_file, has_coin):
     coin_col_start = 12  # L column if has_coin
 
     row = 2
-    for d in all_data:
+    for d in normal_data:
         first_row = row
         tasks = d["tasks"]
         is_grow = d.get("is_grow", False)
@@ -425,6 +499,67 @@ def build_excel(all_data, output_file, has_coin):
         col_letter = chr(64 + i) if i <= 26 else "A" + chr(64 + i - 26)
         ws.column_dimensions[col_letter].width = w
 
+    # ============ 赛事竞猜 Sheet ============
+    if vs_data:
+        ws2 = wb.create_sheet("赛事竞猜")
+        activity_headers = ["活动名称", "活动时间", "UV", "完成任务人数", "任务完成率", "完成任务次数"]
+        for i, h in enumerate(activity_headers, 1):
+            c = ws2.cell(row=1, column=i, value=h)
+            c.font = hfont
+            c.fill = hfill
+            c.alignment = Alignment(horizontal="center")
+            c.border = Border(left=Side(style="thin"), right=Side(style="thin"),
+                              top=Side(style="thin"), bottom=Side(style="thin"))
+
+        match_headers = ["竞猜时间", "A队投票人数", "平局投票人数", "B队投票人数",
+                         "单次参加投票人数", "胜队", "领奖人数", "领奖率"]
+        for i, h in enumerate(match_headers, 1):
+            c = ws2.cell(row=2, column=i, value=h)
+            c.font = Font(bold=True, size=11)
+            c.fill = PatternFill(start_color="D9E2F3", end_color="D9E2F3", fill_type="solid")
+            c.alignment = Alignment(horizontal="center")
+            c.border = Border(left=Side(style="thin"), right=Side(style="thin"),
+                              top=Side(style="thin"), bottom=Side(style="thin"))
+
+        row2 = 3
+        for d in vs_data:
+            first_row = row2
+            tasks = d["tasks"]
+            set_cell(ws2, row2, 1, d["activity"])
+            set_cell(ws2, row2, 2, d["period"])
+            set_cell(ws2, row2, 3, d["uv"])
+            task0 = tasks[0] if tasks else None
+            set_cell(ws2, row2, 4, task0["user_num"] if task0 and task0["user_num"] > 0 else SLASH)
+            set_cell(ws2, row2, 5, f'=IF(OR(C{first_row}=0,D{first_row}="/"),"/",D{first_row}/C{first_row})', pct)
+            set_cell(ws2, row2, 6, task0["num"] if task0 and task0["num"] > 0 else SLASH)
+            row2 += 1
+
+            for t in tasks[1:]:
+                set_cell(ws2, row2, 1)
+                set_cell(ws2, row2, 2)
+                set_cell(ws2, row2, 3)
+                set_cell(ws2, row2, 4, t["user_num"] if t["user_num"] > 0 else SLASH)
+                set_cell(ws2, row2, 5, f'=IF(OR(C{first_row}=0,D{row2}="/"),"/",D{row2}/C{first_row})', pct)
+                set_cell(ws2, row2, 6, t["num"] if t["num"] > 0 else SLASH)
+                row2 += 1
+
+            for m in d["matches"]:
+                set_cell(ws2, row2, 1)
+                set_cell(ws2, row2, 2, m["vs_date"])
+                set_cell(ws2, row2, 3, m["a_votes"] if m["a_votes"] > 0 else SLASH)
+                set_cell(ws2, row2, 4, m["draw_votes"] if m["draw_votes"] > 0 else SLASH)
+                set_cell(ws2, row2, 5, m["b_votes"] if m["b_votes"] > 0 else SLASH)
+                set_cell(ws2, row2, 6, m["total_votes"] if m["total_votes"] > 0 else SLASH)
+                set_cell(ws2, row2, 7, m["winner"])
+                set_cell(ws2, row2, 8, m["reward_num"] if m["reward_num"] > 0 else SLASH)
+                set_cell(ws2, row2, 9, m["reward_rate"] if m["reward_rate"] > 0 else SLASH, pct)
+                row2 += 1
+
+        vs_widths = [14, 24, 8, 14, 12, 12, 20, 14, 14, 14, 18, 12, 14, 12]
+        for i, w in enumerate(vs_widths, 1):
+            col_letter = chr(64 + i) if i <= 26 else "A" + chr(64 + i - 26)
+            ws2.column_dimensions[col_letter].width = w
+
     wb.save(output_file)
 
 
@@ -476,7 +611,8 @@ def main():
         print(f"\n拉取: {act['activity']} ({act['start']} ~ {act['end']})")
         data = fetch_activity(headers, act, args.coin_cutoff)
         all_data.append(data)
-        print(f"  UV: {data['uv']} | 点击: {data['click']} | 任务: {len(data['tasks'])} 个")
+        vs_info = f" | 场次: {len(data['matches'])}" if data.get("is_vs") else ""
+        print(f"  UV: {data['uv']} | 点击: {data['click']} | 任务: {len(data['tasks'])} 个{vs_info}")
 
     build_excel(all_data, args.output, has_coin)
     print(f"\nExcel 已保存: {args.output} ({len(all_data)} 个活动)")
