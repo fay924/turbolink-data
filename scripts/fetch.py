@@ -502,8 +502,13 @@ def build_excel(all_data, output_file, has_coin):
     # ============ 赛事竞猜 Sheet ============
     if vs_data:
         ws2 = wb.create_sheet("赛事竞猜")
-        activity_headers = ["活动名称", "活动时间", "UV", "完成任务人数", "任务完成率", "完成任务次数"]
-        for i, h in enumerate(activity_headers, 1):
+        # 单行表头：活动信息 + 比赛信息
+        vs_headers = [
+            "活动名称", "活动时间", "UV", "完成任务人数", "任务完成率", "完成任务次数",
+            "竞猜时间", "A队投票人数", "平局投票人数", "B队投票人数",
+            "单次参加投票人数", "胜队", "领奖人数", "领奖率",
+        ]
+        for i, h in enumerate(vs_headers, 1):
             c = ws2.cell(row=1, column=i, value=h)
             c.font = hfont
             c.fill = hfill
@@ -511,51 +516,61 @@ def build_excel(all_data, output_file, has_coin):
             c.border = Border(left=Side(style="thin"), right=Side(style="thin"),
                               top=Side(style="thin"), bottom=Side(style="thin"))
 
-        match_headers = ["竞猜时间", "A队投票人数", "平局投票人数", "B队投票人数",
-                         "单次参加投票人数", "胜队", "领奖人数", "领奖率"]
-        for i, h in enumerate(match_headers, 1):
-            c = ws2.cell(row=2, column=i, value=h)
-            c.font = Font(bold=True, size=11)
-            c.fill = PatternFill(start_color="D9E2F3", end_color="D9E2F3", fill_type="solid")
-            c.alignment = Alignment(horizontal="center")
-            c.border = Border(left=Side(style="thin"), right=Side(style="thin"),
-                              top=Side(style="thin"), bottom=Side(style="thin"))
-
-        row2 = 3
+        row2 = 2
         for d in vs_data:
             first_row = row2
             tasks = d["tasks"]
-            set_cell(ws2, row2, 1, d["activity"])
-            set_cell(ws2, row2, 2, d["period"])
-            set_cell(ws2, row2, 3, d["uv"])
-            task0 = tasks[0] if tasks else None
-            set_cell(ws2, row2, 4, task0["user_num"] if task0 and task0["user_num"] > 0 else SLASH)
-            set_cell(ws2, row2, 5, f'=IF(OR(C{first_row}=0,D{first_row}="/"),"/",D{first_row}/C{first_row})', pct)
-            set_cell(ws2, row2, 6, task0["num"] if task0 and task0["num"] > 0 else SLASH)
-            row2 += 1
+            matches = d["matches"]
+            # 每个任务 + 每场比赛组合为一行
+            task_list = tasks if tasks else [{"task_name": "", "user_num": 0, "num": 0}]
+            for ti, t in enumerate(task_list):
+                for mi, m in enumerate(matches):
+                    is_first = (ti == 0 and mi == 0)
+                    # A-F: 活动信息（仅第一行填数据）
+                    if is_first:
+                        set_cell(ws2, row2, 1, d["activity"])
+                        set_cell(ws2, row2, 2, d["period"])
+                        set_cell(ws2, row2, 3, d["uv"])
+                        set_cell(ws2, row2, 4, t["user_num"] if t["user_num"] > 0 else SLASH)
+                        set_cell(ws2, row2, 5, f'=IF(OR(C{first_row}=0,D{first_row}="/"),"/",D{first_row}/C{first_row})', pct)
+                        set_cell(ws2, row2, 6, t["num"] if t["num"] > 0 else SLASH)
+                    elif mi == 0:
+                        # 同活动不同任务行：填任务信息
+                        for c in range(1, 4):
+                            set_cell(ws2, row2, c)
+                        set_cell(ws2, row2, 4, t["user_num"] if t["user_num"] > 0 else SLASH)
+                        set_cell(ws2, row2, 5, f'=IF(OR(C{first_row}=0,D{row2}="/"),"/",D{row2}/C{first_row})', pct)
+                        set_cell(ws2, row2, 6, t["num"] if t["num"] > 0 else SLASH)
+                    else:
+                        for c in range(1, 7):
+                            set_cell(ws2, row2, c)
+                    # G-N: 比赛信息
+                    set_cell(ws2, row2, 7, m["vs_date"])
+                    set_cell(ws2, row2, 8, m["a_votes"] if m["a_votes"] > 0 else SLASH)
+                    set_cell(ws2, row2, 9, m["draw_votes"] if m["draw_votes"] > 0 else SLASH)
+                    set_cell(ws2, row2, 10, m["b_votes"] if m["b_votes"] > 0 else SLASH)
+                    set_cell(ws2, row2, 11, m["total_votes"] if m["total_votes"] > 0 else SLASH)
+                    set_cell(ws2, row2, 12, m["winner"])
+                    set_cell(ws2, row2, 13, m["reward_num"] if m["reward_num"] > 0 else SLASH)
+                    set_cell(ws2, row2, 14, m["reward_rate"] if m["reward_rate"] > 0 else SLASH, pct)
+                    row2 += 1
+                # 如果没有比赛数据，至少输出一行任务信息
+                if not matches:
+                    if ti == 0:
+                        set_cell(ws2, row2, 1, d["activity"])
+                        set_cell(ws2, row2, 2, d["period"])
+                        set_cell(ws2, row2, 3, d["uv"])
+                    else:
+                        for c in range(1, 4):
+                            set_cell(ws2, row2, c)
+                    set_cell(ws2, row2, 4, t["user_num"] if t["user_num"] > 0 else SLASH)
+                    set_cell(ws2, row2, 5, f'=IF(OR(C{first_row}=0,D{row2}="/"),"/",D{row2}/C{first_row})', pct)
+                    set_cell(ws2, row2, 6, t["num"] if t["num"] > 0 else SLASH)
+                    for c in range(7, 15):
+                        set_cell(ws2, row2, c, SLASH)
+                    row2 += 1
 
-            for t in tasks[1:]:
-                set_cell(ws2, row2, 1)
-                set_cell(ws2, row2, 2)
-                set_cell(ws2, row2, 3)
-                set_cell(ws2, row2, 4, t["user_num"] if t["user_num"] > 0 else SLASH)
-                set_cell(ws2, row2, 5, f'=IF(OR(C{first_row}=0,D{row2}="/"),"/",D{row2}/C{first_row})', pct)
-                set_cell(ws2, row2, 6, t["num"] if t["num"] > 0 else SLASH)
-                row2 += 1
-
-            for m in d["matches"]:
-                set_cell(ws2, row2, 1)
-                set_cell(ws2, row2, 2, m["vs_date"])
-                set_cell(ws2, row2, 3, m["a_votes"] if m["a_votes"] > 0 else SLASH)
-                set_cell(ws2, row2, 4, m["draw_votes"] if m["draw_votes"] > 0 else SLASH)
-                set_cell(ws2, row2, 5, m["b_votes"] if m["b_votes"] > 0 else SLASH)
-                set_cell(ws2, row2, 6, m["total_votes"] if m["total_votes"] > 0 else SLASH)
-                set_cell(ws2, row2, 7, m["winner"])
-                set_cell(ws2, row2, 8, m["reward_num"] if m["reward_num"] > 0 else SLASH)
-                set_cell(ws2, row2, 9, m["reward_rate"] if m["reward_rate"] > 0 else SLASH, pct)
-                row2 += 1
-
-        vs_widths = [14, 24, 8, 14, 12, 12, 20, 14, 14, 14, 18, 12, 14, 12]
+        vs_widths = [14, 24, 8, 14, 12, 12, 16, 14, 14, 14, 16, 10, 10, 10]
         for i, w in enumerate(vs_widths, 1):
             col_letter = chr(64 + i) if i <= 26 else "A" + chr(64 + i - 26)
             ws2.column_dimensions[col_letter].width = w
