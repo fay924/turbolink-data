@@ -523,45 +523,42 @@ def build_excel(all_data, output_file, has_coin):
             tasks = d["tasks"]
             matches = d["matches"]
             uv = d["uv"]
-            task0 = tasks[0] if tasks else None
-            # 每场比赛一行，活动+任务信息重复
-            for m in matches:
-                # A-C: 活动信息
-                set_cell(ws2, row2, 1, d["activity"])
-                set_cell(ws2, row2, 2, d["period"])
-                set_cell(ws2, row2, 3, uv)
-                # D-G: 任务信息（取第一个任务）
-                set_cell(ws2, row2, 4, task0["task_name"] if task0 else SLASH)
-                set_cell(ws2, row2, 5, task0["user_num"] if task0 and task0["user_num"] > 0 else SLASH)
-                set_cell(ws2, row2, 6, f'=IF(OR(C{first_row}=0,E{first_row}="/"),"/",E{first_row}/C{first_row})', pct)
-                set_cell(ws2, row2, 7, task0["num"] if task0 and task0["num"] > 0 else SLASH)
-                # H: 竞猜时间
-                set_cell(ws2, row2, 8, m["vs_date"])
-                # I-K: 投票人数
-                set_cell(ws2, row2, 9, m["a_votes"] if m["a_votes"] > 0 else SLASH)
-                set_cell(ws2, row2, 10, m["draw_votes"] if m["draw_votes"] > 0 else SLASH)
-                set_cell(ws2, row2, 11, m["b_votes"] if m["b_votes"] > 0 else SLASH)
-                # L: 单场投票人数
-                set_cell(ws2, row2, 12, m["total_votes"] if m["total_votes"] > 0 else SLASH)
-                # M: 参与率 = 单场投票人数 / UV
-                set_cell(ws2, row2, 13, f'=IF(OR(C{first_row}=0,L{row2}="/"),"/",L{row2}/C{first_row})', pct)
-                # N: 胜队
-                set_cell(ws2, row2, 14, m["winner"])
-                # O-P: 领奖
-                set_cell(ws2, row2, 15, m["reward_num"] if m["reward_num"] > 0 else SLASH)
-                set_cell(ws2, row2, 16, m["reward_rate"] if m["reward_rate"] > 0 else SLASH, pct)
-                row2 += 1
-            # 没有比赛数据时，至少输出一行任务信息
-            if not matches:
-                set_cell(ws2, row2, 1, d["activity"])
-                set_cell(ws2, row2, 2, d["period"])
-                set_cell(ws2, row2, 3, uv)
-                set_cell(ws2, row2, 4, task0["task_name"] if task0 else SLASH)
-                set_cell(ws2, row2, 5, task0["user_num"] if task0 and task0["user_num"] > 0 else SLASH)
-                set_cell(ws2, row2, 6, f'=IF(OR(C{first_row}=0,E{first_row}="/"),"/",E{first_row}/C{first_row})', pct)
-                set_cell(ws2, row2, 7, task0["num"] if task0 and task0["num"] > 0 else SLASH)
-                for c in range(8, 17):
-                    set_cell(ws2, row2, c, SLASH)
+            num_rows = max(len(tasks), len(matches), 1)
+            for i in range(num_rows):
+                is_first = (i == 0)
+                # A-C: 活动信息（仅第一行）
+                if is_first:
+                    set_cell(ws2, row2, 1, d["activity"])
+                    set_cell(ws2, row2, 2, d["period"])
+                    set_cell(ws2, row2, 3, uv)
+                else:
+                    for c in range(1, 4):
+                        set_cell(ws2, row2, c)
+                # D-G: 任务（按行依次排列）
+                if i < len(tasks):
+                    t = tasks[i]
+                    set_cell(ws2, row2, 4, t["task_name"])
+                    set_cell(ws2, row2, 5, t["user_num"] if t["user_num"] > 0 else SLASH)
+                    set_cell(ws2, row2, 6, f'=IF(OR(C{first_row}=0,E{row2}="/"),"/",E{row2}/C{first_row})', pct)
+                    set_cell(ws2, row2, 7, t["num"] if t["num"] > 0 else SLASH)
+                else:
+                    for c in range(4, 8):
+                        set_cell(ws2, row2, c)
+                # H-P: 比赛（按行依次排列）
+                if i < len(matches):
+                    m = matches[i]
+                    set_cell(ws2, row2, 8, m["vs_date"])
+                    set_cell(ws2, row2, 9, m["a_votes"] if m["a_votes"] > 0 else SLASH)
+                    set_cell(ws2, row2, 10, m["draw_votes"] if m["draw_votes"] > 0 else SLASH)
+                    set_cell(ws2, row2, 11, m["b_votes"] if m["b_votes"] > 0 else SLASH)
+                    set_cell(ws2, row2, 12, m["total_votes"] if m["total_votes"] > 0 else SLASH)
+                    set_cell(ws2, row2, 13, f'=IF(OR(C{first_row}=0,L{row2}="/"),"/",L{row2}/C{first_row})', pct)
+                    set_cell(ws2, row2, 14, m["winner"])
+                    set_cell(ws2, row2, 15, m["reward_num"] if m["reward_num"] > 0 else SLASH)
+                    set_cell(ws2, row2, 16, m["reward_rate"] if m["reward_rate"] > 0 else SLASH, pct)
+                else:
+                    for c in range(8, 17):
+                        set_cell(ws2, row2, c)
                 row2 += 1
 
         vs_widths = [14, 24, 8, 14, 12, 10, 12, 14, 14, 14, 14, 14, 10, 8, 10, 10]
