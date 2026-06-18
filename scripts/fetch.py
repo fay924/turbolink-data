@@ -172,7 +172,7 @@ def fetch_campaign_list():
     return all_campaigns
 
 
-def filter_campaigns(campaigns, type_map, type_filter=None, start_date=None, end_date=None):
+def filter_campaigns(campaigns, type_map, type_filter=None, start_date=None):
     """过滤 UV > 阈值的活动"""
     # 构建反向映射：中文名 -> fission_mark
     reverse_map = {v: k for k, v in type_map.items()}
@@ -182,9 +182,7 @@ def filter_campaigns(campaigns, type_map, type_filter=None, start_date=None, end
     if type_filter:
         print(f"  活动类型: {', '.join(type_filter)}")
     if start_date:
-        print(f"  开始日期: {start_date}")
-    if end_date:
-        print(f"  结束日期: {end_date}")
+        print(f"  活动开始 >= {start_date}")
     print(f"{'活动类型':<16} {'活动标题':<24} {'UV':>8} {'状态':>6}")
     print("-" * 60)
     for c in campaigns:
@@ -208,12 +206,10 @@ def filter_campaigns(campaigns, type_map, type_filter=None, start_date=None, end
             if not match:
                 continue
 
-        # 时间范围筛选
+        # 活动开始日期筛选
         act_start = start.replace("/", "-")
         act_end = end.replace("/", "-")
         if start_date and act_start < start_date:
-            continue
-        if end_date and act_end > end_date:
             continue
 
         status = "保留" if uv > UV_THRESHOLD else "跳过"
@@ -528,10 +524,10 @@ def set_cell(ws, row, col, value=None, fmt=None):
     return cell
 
 
-def build_excel(all_data):
+def build_excel(all_data, start_date=None):
     wb = Workbook()
     ws = wb.active
-    ws.title = "活动数据"
+    ws.title = f"活动数据_开始>={start_date}" if start_date else "活动数据"
 
     pct = "0.00%"
     hfill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
@@ -717,9 +713,7 @@ def main():
     parser.add_argument("-t", "--activity-type", action="append",
                         help="活动类型（中文名如 '赛事竞猜' 或 fission_mark 如 'vs'），可多次指定")
     parser.add_argument("-s", "--start-date",
-                        help="活动开始日期筛选（格式: 2025-01-01）")
-    parser.add_argument("-e", "--end-date",
-                        help="活动结束日期筛选（格式: 2025-12-31）")
+                        help="筛选活动开始日期 >= 此值（格式: 2025-01-01）")
     args = parser.parse_args()
 
     print(f"活动搜索范围: {SEARCH_START} ~ {SEARCH_END}")
@@ -734,8 +728,7 @@ def main():
 
     activities = filter_campaigns(campaigns, type_map,
                                   type_filter=args.activity_type,
-                                  start_date=args.start_date,
-                                  end_date=args.end_date)
+                                  start_date=args.start_date)
     print(f"\n符合条件的活动: {len(activities)} 个")
 
     if not activities:
@@ -753,7 +746,7 @@ def main():
         else:
             print(f"  UV: {data['uv']} | 点击: {data['click']} | 任务: {len(data['tasks'])} 个")
 
-    build_excel(all_data)
+    build_excel(all_data, start_date=args.start_date)
     print(f"\nExcel 已保存: {OUTPUT_FILE} ({len(all_data)} 个活动)")
 
 

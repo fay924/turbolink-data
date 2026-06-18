@@ -24,7 +24,20 @@ description: |
 
 如果用户没有主动提供，询问他们。
 
-### 2. 检查 Token 有效性
+### 2. 询问筛选条件
+
+主动询问用户是否需要筛选：
+
+- **活动类型**：想看哪些活动？（如"赛事竞猜"、"金币大派送"、"骰子大富翁"等）
+  - 支持中文名称和 fission_mark（如 `vs`、`coin`）
+  - 可指定多个类型
+  - 不指定则拉取所有类型
+- **活动开始日期**：只看某个日期之后开始的活动？（如"5月份之后的"→ `2025-05-01`）
+  - 不指定则不限制
+
+如果用户明确说"全部"或没有提到筛选条件，直接跳过此步。
+
+### 3. 检查 Token 有效性
 
 Token 是 JWT 格式，可以通过解析 payload 中的 `exp` 字段判断是否过期。
 
@@ -49,29 +62,32 @@ print(f"过期时间: {exp}")
 3. 刷新页面，点击任意一个请求
 4. 在 Request Headers 中找到 `Authorization` 值，复制完整内容（以 `Bearer ` 开头）
 
-### 3. 运行数据拉取
+### 4. 运行数据拉取
 
-使用 skill 自带的 `scripts/fetch.py` 脚本：
+使用 skill 自带的 `scripts/fetch.py` 脚本。
+
+**前置步骤：** 将用户的 Token 和项目 ID 写入脚本配置区（`TOKEN` 和 `PROJECT_ID` 变量）。
 
 ```bash
-python3 <skill-path>/scripts/fetch.py \
-  --token "Bearer xxx" \
-  --project-id "abc123" \
-  --output "活动数据分析.xlsx"
+python3 <skill-path>/scripts/fetch.py [可选参数]
 ```
 
 **可选参数：**
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
+| `-t, --activity-type` | 全部 | 活动类型（中文名如"赛事竞猜"或 fission_mark 如"vs"），可多次指定 |
+| `-s, --start-date` | 无 | 筛选活动开始日期 >= 此值（如 2025-05-01） |
 | `--uv-threshold` | 15 | 仅拉取 UV 大于此值的活动 |
 | `--coin-cutoff` | 无 | 金币回收统计截止日期（如 2026-06-11），不填则不计算金币回收 |
 | `--output` | 活动数据分析.xlsx | 输出文件名 |
 | `--search-start` | 2025/01/01 00:00 | 活动搜索起始时间 |
 | `--search-end` | 2099/12/31 23:59 | 活动搜索结束时间 |
 
+**Sheet 命名规则：** 如果指定了 `-s`，Sheet 名称会变为 `活动数据_开始>=YYYY-MM-DD`。
+
 **金币大派送活动：** 如果用户提到"金币回收"或活动中有 coin 类型，必须传入 `--coin-cutoff` 参数。默认不计算。
 
-### 4. 输出
+### 5. 输出
 
 脚本会在当前目录生成 Excel 文件。告知用户：
 - 文件路径
