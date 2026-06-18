@@ -172,7 +172,7 @@ def fetch_campaign_list():
     return all_campaigns
 
 
-def filter_campaigns(campaigns, type_map, type_filter=None, start_date=None):
+def filter_campaigns(campaigns, type_map, type_filter=None, start_date=None, company=""):
     """过滤 UV > 阈值的活动"""
     # 构建反向映射：中文名 -> fission_mark
     reverse_map = {v: k for k, v in type_map.items()}
@@ -216,7 +216,7 @@ def filter_campaigns(campaigns, type_map, type_filter=None, start_date=None):
         print(f"  {act_type:<14} {name:<24} {uv:>8} {status:>6}")
         if uv > UV_THRESHOLD:
             filtered.append({
-                "company": "",
+                "company": company,
                 "activity": act_type,
                 "fission_mark": fmark,
                 "start": act_start,
@@ -444,9 +444,9 @@ def fetch_vote_distribution(report_id, uv):
         if count == 0:
             continue
         if lo == hi:
-            label = f"{lo}"
+            label = f"{lo}票"
         else:
-            label = f"{lo-1}<x<={hi}"
+            label = f"{lo}~{hi}票"
         result.append({"range": label, "user_num": count, "total_votes": ""})
     return result
 
@@ -714,6 +714,7 @@ def main():
     parser = argparse.ArgumentParser(description="Turbolink 活动数据拉取")
     parser.add_argument("--token", help="Bearer Token（覆盖配置区默认值）")
     parser.add_argument("--project-id", help="项目 ID（覆盖配置区默认值）")
+    parser.add_argument("--company", default="", help="公司名称（显示在 Excel 中）")
     parser.add_argument("-t", "--activity-type", action="append",
                         help="活动类型（中文名如 '赛事竞猜' 或 fission_mark 如 'vs'），可多次指定")
     parser.add_argument("-s", "--start-date",
@@ -742,7 +743,8 @@ def main():
 
     activities = filter_campaigns(campaigns, type_map,
                                   type_filter=args.activity_type,
-                                  start_date=args.start_date)
+                                  start_date=args.start_date,
+                                  company=args.company)
     print(f"\n符合条件的活动: {len(activities)} 个")
 
     if not activities:

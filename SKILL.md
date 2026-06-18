@@ -18,9 +18,10 @@ description: |
 
 ### 1. 获取凭证
 
-需要用户提供两个信息：
+需要用户提供三个信息：
 - **Token**：登录 Turbolink 后台后，从浏览器 DevTools → Network → 任意请求的 `Authorization` 请求头中复制
 - **项目 ID**：Turbolink 后台 URL 中的 `pjid` 参数值
+- **公司名称**：显示在 Excel 公司名列中的名称（如"CSSBuy"、"麦芽"）
 
 如果用户没有主动提供，询问他们。
 
@@ -79,6 +80,7 @@ python3 <skill-path>/scripts/fetch.py \
 |------|------|
 | `--token` | Bearer Token（从浏览器 DevTools 获取） |
 | `--project-id` | 项目 ID（Turbolink 后台 URL 中的 pjid） |
+| `--company` | 公司名称（显示在 Excel 公司名列中） |
 
 **可选参数：**
 | 参数 | 默认值 | 说明 |
