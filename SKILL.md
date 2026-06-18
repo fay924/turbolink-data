@@ -64,13 +64,21 @@ print(f"过期时间: {exp}")
 
 ### 4. 运行数据拉取
 
-使用 skill 自带的 `scripts/fetch.py` 脚本。
-
-**前置步骤：** 将用户的 Token 和项目 ID 写入脚本配置区（`TOKEN` 和 `PROJECT_ID` 变量）。
+使用 skill 自带的 `scripts/fetch.py` 脚本。Token 和项目 ID 通过 CLI 参数传入，无需修改脚本文件。
 
 ```bash
-python3 <skill-path>/scripts/fetch.py [可选参数]
+python3 <skill-path>/scripts/fetch.py \
+  --token "Bearer xxx" \
+  --project-id "abc123" \
+  -t 赛事竞猜 \
+  -s 2025-05-01
 ```
+
+**必填参数：**
+| 参数 | 说明 |
+|------|------|
+| `--token` | Bearer Token（从浏览器 DevTools 获取） |
+| `--project-id` | 项目 ID（Turbolink 后台 URL 中的 pjid） |
 
 **可选参数：**
 | 参数 | 默认值 | 说明 |

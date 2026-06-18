@@ -444,9 +444,9 @@ def fetch_vote_distribution(report_id, uv):
         if count == 0:
             continue
         if lo == hi:
-            label = f"{lo}票"
+            label = f"{lo}"
         else:
-            label = f">{lo-1}且<={hi}"
+            label = f"{lo-1}<x<={hi}"
         result.append({"range": label, "user_num": count, "total_votes": ""})
     return result
 
@@ -709,12 +709,26 @@ def build_excel(all_data, start_date=None):
 # ============ 主流程 ============
 
 def main():
+    global TOKEN, PROJECT_ID, HEADERS, LIST_API_PARAMS
+
     parser = argparse.ArgumentParser(description="Turbolink 活动数据拉取")
+    parser.add_argument("--token", help="Bearer Token（覆盖配置区默认值）")
+    parser.add_argument("--project-id", help="项目 ID（覆盖配置区默认值）")
     parser.add_argument("-t", "--activity-type", action="append",
                         help="活动类型（中文名如 '赛事竞猜' 或 fission_mark 如 'vs'），可多次指定")
     parser.add_argument("-s", "--start-date",
                         help="筛选活动开始日期 >= 此值（格式: 2025-01-01）")
     args = parser.parse_args()
+
+    # CLI 参数覆盖配置区
+    if args.token:
+        TOKEN = args.token
+        HEADERS["authorization"] = TOKEN
+    if args.project_id:
+        PROJECT_ID = args.project_id
+        LIST_API_PARAMS["mate_id"] = PROJECT_ID
+        LIST_API_PARAMS["project_id"] = PROJECT_ID
+        HEADERS["web-set"] = f"lang=zh-cn;pjid={PROJECT_ID}"
 
     print(f"活动搜索范围: {SEARCH_START} ~ {SEARCH_END}")
 
