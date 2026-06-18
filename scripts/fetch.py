@@ -4,13 +4,48 @@ Turbolink 活动数据拉取脚本
 单表纵向堆叠：每个活动的数据依次排列，一行=一个活动+任务
 数据统计使用活动本身的起止时间
 
-用法：
-  python3 fetch.py --token "Bearer xxx" --project-id "abc123"
-  python3 fetch.py --token "Bearer xxx" --project-id "abc123" --coin-cutoff 2026-06-11 --output report.xlsx
+============================================================
+指标计算公式说明
+============================================================
+
+1. UV（独立访客数）
+   来源：活动列表接口的 visitor_num 字段
+   过滤：仅保留 UV > UV_THRESHOLD 的活动
+
+2. 活动参与率
+   公式：点击活动主按钮人数 / UV
+   说明：激励养成活动使用"领养人数"作为点击数
+
+3. 任务完成率
+   公式：完成任务人数 / UV
+
+4. 次留（次日留存率）
+   公式：活动开始后第2天仍活跃的用户数 / 活动当天的用户数
+   来源：留存接口 day_1 字段
+
+5. 7日留（7日留存率）
+   公式：活动开始后第8天仍活跃的用户数 / 活动当天的用户数
+   来源：留存接口 day_7 字段
+
+6. 回收金币（仅金币大派送活动）
+   公式：用户投放金币总数 - 用户领取金币总数
+   说明：按天累加，统计范围为活动开始至 COIN_CUTOFF_DATE
+
+7. 金币回收比例（仅金币大派送活动）
+   公式：回收金币数 / 用户投放金币总数
+   说明：反映平台从用户侧净回收的金币占用户总投入的比例
+
+============================================================
+使用说明
+============================================================
+1. 在配置区填入 TOKEN（从 Turbolink 后台获取）
+2. 填入 PROJECT_ID（项目 ID）
+3. 可选：调整 UV_THRESHOLD、COIN_CUTOFF_DATE 等参数
+4. 运行：python3 turbolink_fetch_client.py
+5. 输出：当前目录下的 Excel 文件
 """
 
 import argparse
-import sys
 import requests
 import time
 from datetime import datetime, timedelta
@@ -19,11 +54,59 @@ from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
+# ============ 配置区（只需改这里）============
+
+# 【必填】Token：登录 Turbolink 后台后，从浏览器请求头中复制 Authorization 值
+TOKEN = "Bearer 你的token粘贴在这里"
+
+# 【必填】项目 ID：Turbolink 后台 URL 中的 pjid 参数值
+PROJECT_ID = "d1qcfa01bc5m7ka0t450"
+
+# 活动搜索时间范围
+SEARCH_START = "2025/01/01 00:00"
+SEARCH_END = "2099/12/31 23:59"
+
+# UV 过滤阈值：仅拉取 UV 大于此值的活动
+UV_THRESHOLD = 15
+
+# 金币回收统计截止日期（包含该天）
+COIN_CUTOFF_DATE = "2026-06-11"
+
+# 输出文件名
+OUTPUT_FILE = "活动数据分析.xlsx"
+
+# ============ 常量 ============
 BASE_URL = "https://api.branchcn.com"
 SLASH = "/"
 
-# ============ 带重试的 Session ============
+LIST_API_PARAMS = {
+    "page": 1,
+    "per_page": 50,
+    "mate_id": PROJECT_ID,
+    "project_id": PROJECT_ID,
+    "start": SEARCH_START,
+    "end": SEARCH_END,
+    "targets[]": [1, 2, 3],
+}
 
+HEADERS = {
+    "accept": "application/json, text/plain, */*",
+    "accept-language": "en,zh-CN;q=0.9,zh;q=0.8",
+    "authorization": TOKEN,
+    "origin": "https://dashboard.turbolink.cc",
+    "referer": "https://dashboard.turbolink.cc/",
+    "sec-ch-ua": '"Google Chrome";v="149", "Chromium";v="149", "Not)A;Brand";v="24"',
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": '"macOS"',
+    "sec-fetch-dest": "empty",
+    "sec-fetch-mode": "cors",
+    "sec-fetch-site": "cross-site",
+    "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36",
+    "web-set": f"lang=zh-cn;pjid={PROJECT_ID}",
+}
+
+
+# ============ 带重试的 Session ============
 def make_session():
     s = requests.Session()
     retries = Retry(total=5, backoff_factor=1, status_forcelist=[500, 502, 503, 504],
@@ -54,65 +137,28 @@ def safe_request(method, url, **kwargs):
                 raise
 
 
-def build_headers(token, project_id):
-    return {
-        "accept": "application/json, text/plain, */*",
-        "accept-language": "en,zh-CN;q=0.9,zh;q=0.8",
-        "authorization": token,
-        "origin": "https://dashboard.turbolink.cc",
-        "referer": "https://dashboard.turbolink.cc/",
-        "sec-ch-ua": '"Google Chrome";v="149", "Chromium";v="149", "Not)A;Brand";v="24"',
-        "sec-ch-ua-mobile": "?0",
-        "sec-ch-ua-platform": '"macOS"',
-        "sec-fetch-dest": "empty",
-        "sec-fetch-mode": "cors",
-        "sec-fetch-site": "cross-site",
-        "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36",
-        "web-set": f"lang=zh-cn;pjid={project_id}",
-    }
-
-
-def parse_token_expiry(token):
-    """解析 JWT token 的过期时间，返回 datetime 或 None"""
-    try:
-        import base64, json
-        parts = token.replace("Bearer ", "").split(".")
-        if len(parts) != 3:
-            return None
-        payload = parts[1]
-        payload += "=" * (4 - len(payload) % 4)
-        data = json.loads(base64.urlsafe_b64decode(payload))
-        exp = data.get("exp")
-        if exp:
-            return datetime.fromtimestamp(exp)
-    except Exception:
-        pass
-    return None
-
-
 # ============ 数据拉取 ============
 
-def fetch_fission_type_map(headers):
+def fetch_fission_type_map():
+    """获取活动类型 mark -> 中文名 映射"""
     url = f"{BASE_URL}/admin/fission/list"
-    resp = safe_request("get", url, headers=headers)
+    resp = safe_request("get", url, headers=HEADERS)
     mapping = {}
     for item in resp.json().get("data", {}).get("list", []):
         mapping[item["mark"]] = item["title"]
     return mapping
 
 
-def fetch_campaign_list(headers, project_id, start, end):
+def fetch_campaign_list():
+    """拉取所有活动（自动翻页）"""
     url = f"{BASE_URL}/admin/fission-campaign/list"
     all_campaigns = []
     page = 1
     while True:
-        params = [
-            ("page", page), ("per_page", 50),
-            ("mate_id", project_id), ("project_id", project_id),
-            ("start", start), ("end", end),
-            ("targets[]", 1), ("targets[]", 2), ("targets[]", 3),
-        ]
-        resp = safe_request("get", url, headers=headers, params=params)
+        params = {**LIST_API_PARAMS, "page": page}
+        targets = params.pop("targets[]")
+        query_params = list(params.items()) + [("targets[]", t) for t in targets]
+        resp = safe_request("get", url, headers=HEADERS, params=query_params)
         data = resp.json().get("data", {})
         items = data.get("list", [])
         if not items:
@@ -126,9 +172,19 @@ def fetch_campaign_list(headers, project_id, start, end):
     return all_campaigns
 
 
-def filter_campaigns(campaigns, type_map, uv_threshold):
+def filter_campaigns(campaigns, type_map, type_filter=None, start_date=None, end_date=None):
+    """过滤 UV > 阈值的活动"""
+    # 构建反向映射：中文名 -> fission_mark
+    reverse_map = {v: k for k, v in type_map.items()}
+
     filtered = []
-    print(f"\n过滤条件: UV > {uv_threshold}")
+    print(f"\n过滤条件: UV > {UV_THRESHOLD}")
+    if type_filter:
+        print(f"  活动类型: {', '.join(type_filter)}")
+    if start_date:
+        print(f"  开始日期: {start_date}")
+    if end_date:
+        print(f"  结束日期: {end_date}")
     print(f"{'活动类型':<16} {'活动标题':<24} {'UV':>8} {'状态':>6}")
     print("-" * 60)
     for c in campaigns:
@@ -141,44 +197,67 @@ def filter_campaigns(campaigns, type_map, uv_threshold):
         uv = c.get("visitor_num", 0) or 0
         if not rid:
             continue
-        status = "保留" if uv > uv_threshold else "跳过"
+
+        # 活动类型筛选
+        if type_filter:
+            match = False
+            for tf in type_filter:
+                if tf == fmark or tf == act_type or reverse_map.get(tf) == fmark:
+                    match = True
+                    break
+            if not match:
+                continue
+
+        # 时间范围筛选
+        act_start = start.replace("/", "-")
+        act_end = end.replace("/", "-")
+        if start_date and act_start < start_date:
+            continue
+        if end_date and act_end > end_date:
+            continue
+
+        status = "保留" if uv > UV_THRESHOLD else "跳过"
         print(f"  {act_type:<14} {name:<24} {uv:>8} {status:>6}")
-        if uv > uv_threshold:
+        if uv > UV_THRESHOLD:
             filtered.append({
+                "company": "",
                 "activity": act_type,
                 "fission_mark": fmark,
-                "start": start.replace("/", "-"),
-                "end": end.replace("/", "-"),
+                "start": act_start,
+                "end": act_end,
                 "report_id": str(rid),
                 "uv": uv,
             })
     return filtered
 
 
-def fetch_uv(headers, report_id, start, end):
+def fetch_uv(report_id, start, end):
+    """获取 UV（独立访客数）"""
     url = f"{BASE_URL}/fbi/report/overview"
     params = {"id": report_id, "start": start, "end": end, "t_offset": 8}
-    resp = safe_request("get", url, headers=headers, params=params)
+    resp = safe_request("get", url, headers=HEADERS, params=params)
     for item in resp.json().get("data", {}).get("list", []):
         if item.get("mark") == "uv":
             return item.get("total", 0)
     return 0
 
 
-def fetch_metric(headers, report_id, metric_type, dems, start, end):
+def fetch_metric(report_id, metric_type, dems, start, end):
+    """获取通用指标（点击、分享、下载、注册等）"""
     url = f"{BASE_URL}/fbi/report/custom"
     payload = {"id": report_id, "type": metric_type, "start": start, "end": end, "dems": dems, "t_offset": 8}
-    resp = safe_request("post", url, headers=headers, json=payload)
+    resp = safe_request("post", url, headers=HEADERS, json=payload)
     for row in resp.json().get("data", {}).get("list", []):
         if all(t.get("name") == "all" for t in row.get("title", [])):
             return row.get("user_num", 0)
     return 0
 
 
-def fetch_task_data(headers, report_id, start, end):
+def fetch_task_data(report_id, start, end):
+    """获取任务数据（任务名称、完成人数、完成次数）"""
     url = f"{BASE_URL}/fbi/report/custom"
     payload = {"id": report_id, "type": 11, "start": start, "end": end, "dems": ["cond_id"], "t_offset": 8}
-    resp = safe_request("post", url, headers=headers, json=payload)
+    resp = safe_request("post", url, headers=HEADERS, json=payload)
     tasks = []
     for row in resp.json().get("data", {}).get("list", []):
         if all(t.get("name") == "all" for t in row.get("title", [])):
@@ -191,22 +270,24 @@ def fetch_task_data(headers, report_id, start, end):
     return tasks
 
 
-def fetch_sign_in_tasks(headers, report_id, start, end):
+def fetch_sign_in_tasks(report_id, start, end):
+    """签到类活动：签到参与人数和次数"""
     url = f"{BASE_URL}/fbi/report/custom"
     payload = {"id": report_id, "type": 14, "start": start, "end": end, "dems": ["level_mark"], "t_offset": 8}
-    resp = safe_request("post", url, headers=headers, json=payload)
+    resp = safe_request("post", url, headers=HEADERS, json=payload)
     for row in resp.json().get("data", {}).get("list", []):
         if all(t.get("name") == "all" for t in row.get("title", [])):
             return [{"task_name": "签到参与", "user_num": row.get("user_num", 0), "num": row.get("num", 0)}]
     return [{"task_name": "签到参与", "user_num": 0, "num": 0}]
 
 
-def fetch_grow_data(headers, report_id, start, end):
+def fetch_grow_data(report_id, start, end):
+    """激励养成活动：领养人数和养成人数"""
     url = f"{BASE_URL}/fbi/report/custom"
     result = {"click": 0, "adopt": 0}
     for mark_type, key in [(16, "click"), (30, "adopt")]:
         payload = {"id": report_id, "type": mark_type, "start": start, "end": end, "dems": ["level_mark"], "t_offset": 8}
-        resp = safe_request("post", url, headers=headers, json=payload)
+        resp = safe_request("post", url, headers=HEADERS, json=payload)
         for row in resp.json().get("data", {}).get("list", []):
             titles = row.get("title", [])
             if all(t.get("name") == "all" for t in titles):
@@ -215,10 +296,11 @@ def fetch_grow_data(headers, report_id, start, end):
     return result
 
 
-def fetch_stay_data(headers, report_id, start, end):
+def fetch_stay_data(report_id, start, end):
+    """留存数据（次留、7日留）"""
     url = f"{BASE_URL}/fbi/report/stay"
     payload = {"id": report_id, "start": start, "end": end}
-    resp = safe_request("post", url, headers=headers, json=payload)
+    resp = safe_request("post", url, headers=HEADERS, json=payload)
     target = (datetime.strptime(start, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
     for row in resp.json().get("data", {}).get("list", []):
         if row.get("date") == target:
@@ -232,14 +314,17 @@ def fetch_stay_data(headers, report_id, start, end):
     return {"day1": 0, "day7": 0}
 
 
-def fetch_coin_recovery(headers, report_id, cutoff_date, start, end):
-    """金币大派送：回收金币 = 用户投放金币总数 - 用户领取金币总数"""
+def fetch_coin_recovery(report_id, start, end):
+    """金币大派送活动：回收金币和用户投放总数
+    公式：回收金币 = 用户投放金币总数 - 用户领取金币总数
+    统计范围：活动开始至 COIN_CUTOFF_DATE（含）
+    """
     url = f"{BASE_URL}/admin/fission-stat/reward-detail"
     params = {"id": report_id}
-    resp = safe_request("get", url, headers=headers, params=params)
+    resp = safe_request("get", url, headers=HEADERS, params=params)
     data = resp.json().get("data", {})
     pools = data.get("pools", [])
-    cutoff = datetime.strptime(cutoff_date, "%Y-%m-%d")
+    cutoff = datetime.strptime(COIN_CUTOFF_DATE, "%Y-%m-%d")
     total_user = 0
     total_get = 0
     for p in pools:
@@ -251,16 +336,16 @@ def fetch_coin_recovery(headers, report_id, cutoff_date, start, end):
         total_get += p.get("get_coin", 0)
     recovery = total_user - total_get
     # 投放金币人数(type=38)、领取金币人数(type=39)
-    put_num = fetch_metric(headers, report_id, 38, ["platform"], start, end)
-    get_num = fetch_metric(headers, report_id, 39, ["platform"], start, end)
+    put_num = fetch_metric(report_id, 38, ["platform"], start, end)
+    get_num = fetch_metric(report_id, 39, ["platform"], start, end)
     return recovery, total_user, put_num, get_num
 
 
-def fetch_match_data(headers, report_id):
-    """赛事竞猜：从 reward-detail 的 schedules 字段获取竞猜场次数据"""
+def fetch_match_data(report_id):
+    """赛事竞猜活动：获取每场比赛数据"""
     url = f"{BASE_URL}/admin/fission-stat/reward-detail"
     params = {"id": report_id}
-    resp = safe_request("get", url, headers=headers, params=params)
+    resp = safe_request("get", url, headers=HEADERS, params=params)
     data = resp.json().get("data", {})
     schedules = data.get("schedules") or []
     matches = []
@@ -319,7 +404,59 @@ def fetch_match_data(headers, report_id):
     return matches
 
 
-def fetch_activity(headers, act, coin_cutoff):
+def fetch_vote_distribution(report_id, uv):
+    """赛事竞猜：从用户列表接口获取投票分布"""
+    url = f"{BASE_URL}/admin/fission-user/new-list"
+    all_vote_nums = []
+    page = 1
+    per_page = 1000
+    while True:
+        params = {
+            "pid_type": 0, "t_offset": 8, "start": "", "end": "",
+            "page": page, "per_page": per_page, "id": report_id,
+        }
+        resp = safe_request("get", url, headers=HEADERS, params=params)
+        data = resp.json().get("data", {})
+        users = data.get("list", [])
+        if not users:
+            break
+        for u in users:
+            vn = u.get("vs", {}).get("vote_num", 0)
+            all_vote_nums.append(vn)
+        total = data.get("total", 0)
+        if len(all_vote_nums) >= total:
+            break
+        page += 1
+    voted = [v for v in all_vote_nums if v > 0]
+    if not voted:
+        return []
+    max_vote = max(voted)
+    ranges = [(1, 1)]
+    upper = 1
+    while upper < max_vote:
+        lower = upper + 1
+        upper = min(upper + 10, max_vote)
+        ranges.append((lower, upper))
+        if upper >= max_vote:
+            break
+    result = []
+    total_users = len(voted)
+    total_vote_sum = sum(voted)
+    result.append({"range": "总计", "user_num": total_users, "total_votes": total_vote_sum})
+    for lo, hi in ranges:
+        count = sum(1 for v in voted if lo <= v <= hi)
+        if count == 0:
+            continue
+        if lo == hi:
+            label = f"{lo}票"
+        else:
+            label = f">{lo-1}且<={hi}"
+        result.append({"range": label, "user_num": count, "total_votes": ""})
+    return result
+
+
+def fetch_activity(act):
+    """拉取单个活动的完整数据"""
     rid = act["report_id"]
     s, e = act["start"], act["end"]
     fmark = act.get("fission_mark", "")
@@ -327,19 +464,19 @@ def fetch_activity(headers, act, coin_cutoff):
     is_grow = (fmark == "keep")
     is_coin = (fmark == "coin")
     is_vs = (fmark == "vs")
-    stay = fetch_stay_data(headers, rid, s, e)
+    stay = fetch_stay_data(rid, s, e)
 
     if is_sign_in:
-        tasks = fetch_sign_in_tasks(headers, rid, s, e)
+        tasks = fetch_sign_in_tasks(rid, s, e)
         click = 0
     else:
-        tasks = fetch_task_data(headers, rid, s, e)
-        click = fetch_metric(headers, rid, 5, ["channel_id"], s, e)
+        tasks = fetch_task_data(rid, s, e)
+        click = fetch_metric(rid, 5, ["channel_id"], s, e)
 
     grow_click = 0
     grow_adopt = 0
     if is_grow:
-        grow = fetch_grow_data(headers, rid, s, e)
+        grow = fetch_grow_data(rid, s, e)
         grow_click = grow["click"]
         grow_adopt = grow["adopt"]
 
@@ -347,14 +484,17 @@ def fetch_activity(headers, act, coin_cutoff):
     coin_user_total = 0
     coin_put_num = 0
     coin_get_num = 0
-    if is_coin and coin_cutoff:
-        coin_recovery, coin_user_total, coin_put_num, coin_get_num = fetch_coin_recovery(headers, rid, coin_cutoff, s, e)
+    if is_coin:
+        coin_recovery, coin_user_total, coin_put_num, coin_get_num = fetch_coin_recovery(rid, s, e)
 
     matches = []
+    vote_dist = []
     if is_vs:
-        matches = fetch_match_data(headers, rid)
+        matches = fetch_match_data(rid)
+        vote_dist = fetch_vote_distribution(rid, act.get("uv", 0))
 
     return {
+        "company": act.get("company", ""),
         "activity": act["activity"],
         "period": f"{s} ~ {e}",
         "is_grow": is_grow,
@@ -371,6 +511,7 @@ def fetch_activity(headers, act, coin_cutoff):
         "coin_put_num": coin_put_num,
         "coin_get_num": coin_get_num,
         "matches": matches,
+        "vote_dist": vote_dist,
     }
 
 
@@ -387,7 +528,7 @@ def set_cell(ws, row, col, value=None, fmt=None):
     return cell
 
 
-def build_excel(all_data, output_file, has_coin):
+def build_excel(all_data):
     wb = Workbook()
     ws = wb.active
     ws.title = "活动数据"
@@ -396,19 +537,18 @@ def build_excel(all_data, output_file, has_coin):
     hfill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
     hfont = Font(bold=True, size=11, color="FFFFFF")
 
-    # 分离 vs 活动和其他活动
     normal_data = [d for d in all_data if not d.get("is_vs")]
     vs_data = [d for d in all_data if d.get("is_vs")]
 
+    # ============ 普通活动 ============
+    # A-D: 基础信息, E-F: 点击参与率, G-J: 任务, K-L: 留存, M-R: 金币
     headers = [
-        "活动名称", "活动时间", "UV",                              # A-C
-        "点击活动主按钮人数", "活动参与率",                          # D-E
-        "任务名称", "完成任务人数", "任务完成率", "完成任务次数",      # F-I
-        "次留", "7日留",                                            # J-K
+        "公司名称", "活动名称", "活动时间", "UV",                    # A-D
+        "点击活动主按钮人数", "活动参与率",                            # E-F
+        "任务名称", "完成任务人数", "任务完成率", "完成任务次数",        # G-J
+        "次留", "7日留", "回收金币", "金币回收比例",                  # K-N
+        "投放金币人数", "投放金币率", "领取金币人数", "领取金币率",  # O-R
     ]
-    if has_coin:
-        headers.extend(["回收金币", "金币回收比例", "投放金币人数", "投放金币率", "领取金币人数", "领取金币率"])
-
     for i, h in enumerate(headers, 1):
         c = ws.cell(row=1, column=i, value=h)
         c.font = hfont
@@ -416,8 +556,6 @@ def build_excel(all_data, output_file, has_coin):
         c.alignment = Alignment(horizontal="center")
         c.border = Border(left=Side(style="thin"), right=Side(style="thin"),
                           top=Side(style="thin"), bottom=Side(style="thin"))
-
-    coin_col_start = 12  # L column if has_coin
 
     row = 2
     for d in normal_data:
@@ -432,196 +570,191 @@ def build_excel(all_data, output_file, has_coin):
             is_grow_adopt_row = is_grow and has_grow_adopt and i == 1
             task = tasks[i] if 0 <= i < len(tasks) else None
 
-            # A-C: 基础信息
             if is_first:
-                set_cell(ws, row, 1, d["activity"])
-                set_cell(ws, row, 2, d["period"])
-                set_cell(ws, row, 3, d["uv"])
+                set_cell(ws, row, 1, d["company"])
+                set_cell(ws, row, 2, d["activity"])
+                set_cell(ws, row, 3, d["period"])
+                set_cell(ws, row, 4, d["uv"])
             else:
-                for c in range(1, 4):
+                for c in range(1, 5):
                     set_cell(ws, row, c)
 
-            # D-E: 点击主按钮 + 参与率
             if is_first:
                 click_val = d["grow_click"] if is_grow else d["click"]
-                set_cell(ws, row, 4, click_val if click_val > 0 else SLASH)
-                set_cell(ws, row, 5, f'=IF(OR(C{first_row}=0,D{first_row}="/"),"/",D{first_row}/C{first_row})', pct)
+                set_cell(ws, row, 5, click_val if click_val > 0 else SLASH)
+                set_cell(ws, row, 6, f'=IF(OR(D{first_row}=0,E{first_row}="/"),"/",E{first_row}/D{first_row})', pct)
             elif is_grow_adopt_row:
-                set_cell(ws, row, 4, d["grow_adopt"])
-                set_cell(ws, row, 5, f'=IF(OR(C{first_row}=0,D{row}=0),"/",D{row}/C{first_row})', pct)
+                set_cell(ws, row, 5, d["grow_adopt"])
+                set_cell(ws, row, 6, f'=IF(OR(D{first_row}=0,E{row}=0),"/",E{row}/D{first_row})', pct)
             else:
-                set_cell(ws, row, 4)
                 set_cell(ws, row, 5)
+                set_cell(ws, row, 6)
 
-            # F-I: 任务
             if task:
-                set_cell(ws, row, 6, task["task_name"])
-                set_cell(ws, row, 7, task["user_num"] if task["user_num"] > 0 else SLASH)
-                set_cell(ws, row, 8, f'=IF(OR($C${first_row}=0,G{row}="/"),"/",G{row}/$C${first_row})', pct)
-                set_cell(ws, row, 9, task["num"] if task["num"] > 0 else SLASH)
+                set_cell(ws, row, 7, task["task_name"])
+                set_cell(ws, row, 8, task["user_num"] if task["user_num"] > 0 else SLASH)
+                set_cell(ws, row, 9, f'=IF(OR($D${first_row}=0,H{row}="/"),"/",H{row}/$D${first_row})', pct)
+                set_cell(ws, row, 10, task["num"] if task["num"] > 0 else SLASH)
             else:
-                set_cell(ws, row, 6, SLASH)
                 set_cell(ws, row, 7, SLASH)
-                set_cell(ws, row, 8)
-                set_cell(ws, row, 9, SLASH)
+                set_cell(ws, row, 8, SLASH)
+                set_cell(ws, row, 9)
+                set_cell(ws, row, 10, SLASH)
 
-            # J-K: 留存
             if is_first:
-                set_cell(ws, row, 10, d["day1"] if d["day1"] > 0 else SLASH, pct)
-                set_cell(ws, row, 11, d["day7"] if d["day7"] > 0 else SLASH, pct)
+                set_cell(ws, row, 11, d["day1"] if d["day1"] > 0 else SLASH, pct)
+                set_cell(ws, row, 12, d["day7"] if d["day7"] > 0 else SLASH, pct)
             else:
-                set_cell(ws, row, 10)
                 set_cell(ws, row, 11)
+                set_cell(ws, row, 12)
 
-            # L-Q: 金币相关（可选）
-            if has_coin:
-                if is_first and d.get("is_coin"):
-                    set_cell(ws, row, coin_col_start, d["coin_recovery"] if d["coin_recovery"] > 0 else SLASH)
-                    ratio = d["coin_recovery"] / d["coin_user_total"] if d["coin_user_total"] > 0 else 0
-                    set_cell(ws, row, coin_col_start + 1, ratio if ratio > 0 else SLASH, pct)
-                    put_num = d.get("coin_put_num", 0)
-                    get_num = d.get("coin_get_num", 0)
-                    set_cell(ws, row, coin_col_start + 2, put_num if put_num > 0 else SLASH)
-                    set_cell(ws, row, coin_col_start + 3, f'=IF(OR($C${first_row}=0,{chr(64+coin_col_start+2)}{row}="/"),"/",{chr(64+coin_col_start+2)}{row}/$C${first_row})', pct)
-                    set_cell(ws, row, coin_col_start + 4, get_num if get_num > 0 else SLASH)
-                    set_cell(ws, row, coin_col_start + 5, f'=IF(OR($C${first_row}=0,{chr(64+coin_col_start+4)}{row}="/"),"/",{chr(64+coin_col_start+4)}{row}/$C${first_row})', pct)
-                else:
-                    for c in range(coin_col_start, coin_col_start + 6):
-                        set_cell(ws, row, c)
+            if is_first and d.get("is_coin"):
+                set_cell(ws, row, 13, d["coin_recovery"] if d["coin_recovery"] > 0 else SLASH)
+                ratio = d["coin_recovery"] / d["coin_user_total"] if d["coin_user_total"] > 0 else 0
+                set_cell(ws, row, 14, ratio if ratio > 0 else SLASH, pct)
+            else:
+                set_cell(ws, row, 13)
+                set_cell(ws, row, 14)
+
+            if is_first and d.get("is_coin"):
+                put_num = d.get("coin_put_num", 0)
+                get_num = d.get("coin_get_num", 0)
+                set_cell(ws, row, 15, put_num if put_num > 0 else SLASH)
+                set_cell(ws, row, 16, f'=IF(OR($D${first_row}=0,O{row}="/"),"/",O{row}/$D${first_row})', pct)
+                set_cell(ws, row, 17, get_num if get_num > 0 else SLASH)
+                set_cell(ws, row, 18, f'=IF(OR($D${first_row}=0,Q{row}="/"),"/",Q{row}/$D${first_row})', pct)
+            else:
+                for c in range(15, 19):
+                    set_cell(ws, row, c)
 
             row += 1
 
-    # 列宽
-    widths = [14, 24, 8, 20, 10, 40, 12, 10, 12, 10, 10]
-    if has_coin:
-        widths.extend([14, 12, 14, 12, 14, 12])
-    for i, w in enumerate(widths, 1):
-        col_letter = chr(64 + i) if i <= 26 else "A" + chr(64 + i - 26)
-        ws.column_dimensions[col_letter].width = w
-
-    # ============ 赛事竞猜 Sheet ============
+    # ============ 赛事竞猜活动（在普通活动之后）============
     if vs_data:
-        ws2 = wb.create_sheet("赛事竞猜")
-        # 单行表头：A-G 活动+任务，H-P 比赛信息
+        # 空一行分隔
+        row += 1
+        # vs 表头：A-D 基础信息, E-F 留空, G-J 任务, K-N 投票分布
         vs_headers = [
-            "活动名称", "活动时间", "UV",
-            "任务名称", "完成任务人数", "任务完成率", "完成任务次数",
-            "竞猜时间", "A队投票人数", "平局投票人数", "B队投票人数",
-            "单次参加投票人数", "参与率", "胜队", "领奖人数", "领奖率",
+            "公司名称", "活动名称", "活动时间", "UV",                    # A-D
+            "", "",                                                      # E-F 留空
+            "任务名称", "完成任务人数", "任务完成率", "完成任务次数",        # G-J
+            "投票范围", "投票人数", "参与率", "投票总次数",              # K-N
         ]
         for i, h in enumerate(vs_headers, 1):
-            c = ws2.cell(row=1, column=i, value=h)
+            if not h:
+                continue
+            c = ws.cell(row=row, column=i, value=h)
             c.font = hfont
             c.fill = hfill
             c.alignment = Alignment(horizontal="center")
             c.border = Border(left=Side(style="thin"), right=Side(style="thin"),
                               top=Side(style="thin"), bottom=Side(style="thin"))
+        # 留空列也加边框
+        for i in [5, 6]:
+            c = ws.cell(row=row, column=i)
+            c.font = hfont
+            c.fill = hfill
+            c.border = Border(left=Side(style="thin"), right=Side(style="thin"),
+                              top=Side(style="thin"), bottom=Side(style="thin"))
+        row += 1
 
-        row2 = 2
         for d in vs_data:
-            first_row = row2
+            first_row = row
             tasks = d["tasks"]
-            matches = d["matches"]
+            vote_dist = d.get("vote_dist", [])
             uv = d["uv"]
-            num_rows = max(len(tasks), len(matches), 1)
+            # 任务和投票分布按行排列
+            num_rows = max(len(tasks), len(vote_dist), 1)
             for i in range(num_rows):
                 is_first = (i == 0)
-                # A-C: 活动信息（仅第一行）
+                # A-D: 活动信息（仅第一行）
                 if is_first:
-                    set_cell(ws2, row2, 1, d["activity"])
-                    set_cell(ws2, row2, 2, d["period"])
-                    set_cell(ws2, row2, 3, uv)
+                    set_cell(ws, row, 1, d["company"])
+                    set_cell(ws, row, 2, d["activity"])
+                    set_cell(ws, row, 3, d["period"])
+                    set_cell(ws, row, 4, uv)
                 else:
-                    for c in range(1, 4):
-                        set_cell(ws2, row2, c)
-                # D-G: 任务（按行依次排列）
+                    for c in range(1, 5):
+                        set_cell(ws, row, c)
+                # E-F: 留空
+                set_cell(ws, row, 5)
+                set_cell(ws, row, 6)
+                # G-J: 任务
                 if i < len(tasks):
                     t = tasks[i]
-                    set_cell(ws2, row2, 4, t["task_name"])
-                    set_cell(ws2, row2, 5, t["user_num"] if t["user_num"] > 0 else SLASH)
-                    set_cell(ws2, row2, 6, f'=IF(OR(C{first_row}=0,E{row2}="/"),"/",E{row2}/C{first_row})', pct)
-                    set_cell(ws2, row2, 7, t["num"] if t["num"] > 0 else SLASH)
+                    set_cell(ws, row, 7, t["task_name"])
+                    set_cell(ws, row, 8, t["user_num"] if t["user_num"] > 0 else SLASH)
+                    set_cell(ws, row, 9, f'=IF(OR($D${first_row}=0,H{row}="/"),"/",H{row}/$D${first_row})', pct)
+                    set_cell(ws, row, 10, t["num"] if t["num"] > 0 else SLASH)
                 else:
-                    for c in range(4, 8):
-                        set_cell(ws2, row2, c)
-                # H-P: 比赛（按行依次排列）
-                if i < len(matches):
-                    m = matches[i]
-                    set_cell(ws2, row2, 8, m["vs_date"])
-                    set_cell(ws2, row2, 9, m["a_votes"] if m["a_votes"] > 0 else SLASH)
-                    set_cell(ws2, row2, 10, m["draw_votes"] if m["draw_votes"] > 0 else SLASH)
-                    set_cell(ws2, row2, 11, m["b_votes"] if m["b_votes"] > 0 else SLASH)
-                    set_cell(ws2, row2, 12, m["total_votes"] if m["total_votes"] > 0 else SLASH)
-                    set_cell(ws2, row2, 13, f'=IF(OR(C{first_row}=0,L{row2}="/"),"/",L{row2}/C{first_row})', pct)
-                    set_cell(ws2, row2, 14, m["winner"])
-                    set_cell(ws2, row2, 15, m["reward_num"] if m["reward_num"] > 0 else SLASH)
-                    set_cell(ws2, row2, 16, m["reward_rate"] if m["reward_rate"] > 0 else SLASH, pct)
+                    for c in range(7, 11):
+                        set_cell(ws, row, c)
+                # K-N: 投票分布
+                if i < len(vote_dist):
+                    vd = vote_dist[i]
+                    set_cell(ws, row, 11, vd["range"])
+                    set_cell(ws, row, 12, vd["user_num"] if vd["user_num"] > 0 else SLASH)
+                    set_cell(ws, row, 13, f'=IF(OR($D${first_row}=0,L{row}="/"),"/",L{row}/$D${first_row})', pct)
+                    set_cell(ws, row, 14, vd["total_votes"] if vd["total_votes"] else SLASH)
                 else:
-                    for c in range(8, 17):
-                        set_cell(ws2, row2, c)
-                row2 += 1
+                    for c in range(11, 15):
+                        set_cell(ws, row, c)
+                row += 1
 
-        vs_widths = [14, 24, 8, 14, 12, 10, 12, 14, 14, 14, 14, 14, 10, 8, 10, 10]
-        for i, w in enumerate(vs_widths, 1):
-            col_letter = chr(64 + i) if i <= 26 else "A" + chr(64 + i - 26)
-            ws2.column_dimensions[col_letter].width = w
+    # 列宽
+    widths = [14, 14, 24, 8, 20, 10, 40, 12, 10, 12, 14, 12, 10, 12, 14, 12, 14, 12]
+    for i, w in enumerate(widths, 1):
+        col_letter = chr(64 + i) if i <= 26 else "A" + chr(64 + i - 26)
+        ws.column_dimensions[col_letter].width = w
 
-    wb.save(output_file)
+    wb.save(OUTPUT_FILE)
 
 
 # ============ 主流程 ============
 
 def main():
     parser = argparse.ArgumentParser(description="Turbolink 活动数据拉取")
-    parser.add_argument("--token", required=True, help="Bearer token (从 Turbolink 后台获取)")
-    parser.add_argument("--project-id", required=True, help="项目 ID (Turbolink 后台 URL 中的 pjid)")
-    parser.add_argument("--uv-threshold", type=int, default=15, help="UV 过滤阈值 (默认 15)")
-    parser.add_argument("--coin-cutoff", default=None, help="金币回收统计截止日期，如 2026-06-11")
-    parser.add_argument("--output", default="活动数据分析.xlsx", help="输出文件名")
-    parser.add_argument("--search-start", default="2025/01/01 00:00", help="活动搜索起始时间")
-    parser.add_argument("--search-end", default="2099/12/31 23:59", help="活动搜索结束时间")
+    parser.add_argument("-t", "--activity-type", action="append",
+                        help="活动类型（中文名如 '赛事竞猜' 或 fission_mark 如 'vs'），可多次指定")
+    parser.add_argument("-s", "--start-date",
+                        help="活动开始日期筛选（格式: 2025-01-01）")
+    parser.add_argument("-e", "--end-date",
+                        help="活动结束日期筛选（格式: 2025-12-31）")
     args = parser.parse_args()
 
-    # 检查 token 是否过期
-    exp = parse_token_expiry(args.token)
-    if exp and exp < datetime.now():
-        print(f"错误: Token 已过期 ({exp.strftime('%Y-%m-%d %H:%M')})，请从 Turbolink 后台获取新 Token")
-        sys.exit(1)
-    elif exp:
-        print(f"Token 有效至: {exp.strftime('%Y-%m-%d %H:%M')}")
-
-    headers = build_headers(args.token, args.project_id)
-
-    print(f"活动搜索范围: {args.search_start} ~ {args.search_end}")
+    print(f"活动搜索范围: {SEARCH_START} ~ {SEARCH_END}")
 
     print("正在获取活动类型映射...")
-    type_map = fetch_fission_type_map(headers)
+    type_map = fetch_fission_type_map()
     print(f"  共 {len(type_map)} 种活动类型")
 
     print("正在拉取活动列表...")
-    campaigns = fetch_campaign_list(headers, args.project_id, args.search_start, args.search_end)
+    campaigns = fetch_campaign_list()
     print(f"共获取 {len(campaigns)} 个活动")
 
-    activities = filter_campaigns(campaigns, type_map, args.uv_threshold)
+    activities = filter_campaigns(campaigns, type_map,
+                                  type_filter=args.activity_type,
+                                  start_date=args.start_date,
+                                  end_date=args.end_date)
     print(f"\n符合条件的活动: {len(activities)} 个")
 
     if not activities:
         print("没有符合条件的活动，退出")
         return
 
-    has_coin = any(a["fission_mark"] == "coin" for a in activities)
-
     print("\n开始拉取详细数据...")
     all_data = []
     for act in activities:
         print(f"\n拉取: {act['activity']} ({act['start']} ~ {act['end']})")
-        data = fetch_activity(headers, act, args.coin_cutoff)
+        data = fetch_activity(act)
         all_data.append(data)
-        vs_info = f" | 场次: {len(data['matches'])}" if data.get("is_vs") else ""
-        print(f"  UV: {data['uv']} | 点击: {data['click']} | 任务: {len(data['tasks'])} 个{vs_info}")
+        if data.get("is_vs"):
+            print(f"  UV: {data['uv']} | 任务: {len(data['tasks'])} 个 | 投票分布: {len(data.get('vote_dist', []))} 段")
+        else:
+            print(f"  UV: {data['uv']} | 点击: {data['click']} | 任务: {len(data['tasks'])} 个")
 
-    build_excel(all_data, args.output, has_coin)
-    print(f"\nExcel 已保存: {args.output} ({len(all_data)} 个活动)")
+    build_excel(all_data)
+    print(f"\nExcel 已保存: {OUTPUT_FILE} ({len(all_data)} 个活动)")
 
 
 if __name__ == "__main__":
